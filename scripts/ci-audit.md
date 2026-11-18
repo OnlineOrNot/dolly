@@ -36,6 +36,8 @@ These buckets use API step boundaries. If a test command also installs Docker, b
 
 Compare matching workflow revisions, runner labels, event types, outcomes, and cache warmth. Failed checks can end early. An aggregate success check may take only seconds because it waits on other jobs, not because validation became free. Successful-workflow wall time excludes failed, cancelled, skipped, and unexecuted runs and is not an all-outcomes PR SLA. The capture retains individual conclusions and revisions to make these distinctions inspectable.
 
+Runner-minute totals exclude skipped jobs and require valid start/end timestamps and evidence of runner execution. JSON and Markdown report how many non-skipped jobs could not be measured. Totals are partial when some are missing, and N/A when none can be measured.
+
 Earlier rerun attempts are not fetched. The report flags runs with multiple attempts, and its compute total is a lower bound if reruns occurred. Rounded runner-minutes are a billing input, not a dollar cost: rates, allowances, cache/storage charges, and the account's invoice must be supplied separately. Cache hit rates require separate evidence from logs or explicit workflow outputs.
 
 ## Optimization order

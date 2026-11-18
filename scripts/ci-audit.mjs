@@ -43,13 +43,18 @@ export function phase(name) {
 }
 
 export function measureJob(job, run) {
-  const active = seconds(job.started_at, job.completed_at);
   const waiting = seconds(job.created_at, job.started_at);
   const dependencyDelay = seconds(run.created_at, job.created_at);
 
   const spans = (job.steps ?? [])
     .filter((step) => step.conclusion !== "skipped")
     .map((step) => ({ ...step, seconds: seconds(step.started_at, step.completed_at) }));
+
+  // Jobs that never acquired a runner can still have start and end timestamps.
+  const active =
+    job.conclusion !== "skipped" && (job.runner_id > 0 || spans.length > 0)
+      ? seconds(job.started_at, job.completed_at)
+      : null;
 
   const measured = spans.every((step) => step.seconds !== null);
   const stepTotal = spans.reduce((total, step) => total + (step.seconds ?? 0), 0);
@@ -79,7 +84,7 @@ export function measureJob(job, run) {
     active,
     complete,
     // Keep partial/cancelled time in compute totals, never in completed-job percentiles.
-    billableMinutes: active === null || spans.length === 0 ? null : Math.ceil(active / 60),
+    billableMinutes: active === null ? null : Math.ceil(active / 60),
     steps: spans,
   };
 }
@@ -117,6 +122,8 @@ export function summarize(capture) {
   });
 
   const jobs = runs.flatMap((run) => run.jobs);
+  const computeJobs = jobs.filter((job) => job.conclusion !== "skipped");
+  const measuredCompute = computeJobs.filter((job) => job.active !== null);
 
   return {
     repository: capture.repository,
@@ -160,8 +167,14 @@ export function summarize(capture) {
         ),
       ]),
     ),
-    observedRunnerMinutes: jobs.reduce((total, job) => total + (job.active ?? 0) / 60, 0),
-    roundedRunnerMinutes: jobs.reduce((total, job) => total + (job.billableMinutes ?? 0), 0),
+    observedRunnerMinutes: measuredCompute.length
+      ? measuredCompute.reduce((total, job) => total + job.active, 0) / 60
+      : null,
+    roundedRunnerMinutes: measuredCompute.length
+      ? measuredCompute.reduce((total, job) => total + job.billableMinutes, 0)
+      : null,
+    measuredComputeJobs: measuredCompute.length,
+    unmeasuredComputeJobs: computeJobs.length - measuredCompute.length,
     unmeasuredJobs: jobs.filter((job) => !job.complete).length,
     rerunAttempts: runs.filter((run) => run.attempt > 1).length,
     runs,
@@ -173,6 +186,11 @@ function pair(value) {
 }
 
 export function markdown(report) {
+  const computeCoverage = `${report.measuredComputeJobs} measured jobs, ${report.unmeasuredComputeJobs} unmeasured non-skipped jobs`;
+
+  const computeStatus =
+    report.measuredComputeJobs && report.unmeasuredComputeJobs ? "partial; " : "";
+
   return [
     `# CI audit: ${report.repository}`,
     "",
@@ -193,7 +211,7 @@ export function markdown(report) {
     "",
     ...Object.entries(report.wall).map(([event, value]) => `- ${event}: ${pair(value)}`),
     "",
-    `Observed active runner minutes: ${report.observedRunnerMinutes.toFixed(2)}; sum of per-job rounded minutes: ${report.roundedRunnerMinutes}.`,
+    `Observed active runner minutes: ${report.observedRunnerMinutes?.toFixed(2) ?? "N/A"}; sum of per-job rounded minutes: ${report.roundedRunnerMinutes ?? "N/A"} (${computeStatus}${computeCoverage}).`,
     `Excluded from completed-job phase percentiles: ${report.unmeasuredJobs} jobs. Runs with attempt > 1: ${report.rerunAttempts}.`,
     "",
     "## Interpretation and limits",
@@ -204,6 +222,7 @@ export function markdown(report) {
     "- Skipped, cancelled, unfinished, and invalid-timestamp jobs are retained in JSON but excluded from phase percentiles. Failed completed jobs are included and may represent truncated work; inspect individual conclusions in JSON. Wall percentiles above use successful workflows only, not a representative all-outcomes PR SLA.",
     "- Job names can span workflow revisions. Per-run SHA, workflow path, attempt, event, labels, conclusions, and step timings are retained; compare matched revisions before claiming an improvement.",
     "- Only the latest attempt of each run is fetched. Earlier attempts are not included in time/cost totals; reruns can increase actual spend. No requests or checks are retried by this auditor.",
+    "- Compute totals use non-skipped jobs with runner or step evidence and valid start/end timestamps. Missing measurements make numeric totals partial; no measurements produce N/A.",
     "- Runner minutes are not an invoice. Rates, free allowances, cache/storage charges, previous attempts, and the account's bill are unknown. Cache hit rate is unavailable from job metadata alone.",
     "- No logs, artifacts, credentials, or environment variables are collected. The raw API capture supports re-analysis without re-fetching.",
     "",

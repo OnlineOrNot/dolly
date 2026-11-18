@@ -119,6 +119,8 @@ test("cancelled jobs retain consumed compute without shortening completed percen
   assert.equal(report.groups[0].phases.running.samples, 1);
   assert.equal(report.unmeasuredJobs, 1);
   assert.equal(report.roundedRunnerMinutes, 2);
+  assert.equal(report.measuredComputeJobs, 2);
+  assert.equal(report.unmeasuredComputeJobs, 0);
   assert.equal(report.wall.pull_request.samples, 1);
   assert.equal(report.wall.pull_request.p50, 48);
 });
@@ -159,7 +161,43 @@ test("empty repositories and entirely skipped runs have no baseline", () => {
     const report = summarize(capture(runs));
     assert.equal(report.wall.pull_request.p50, null);
     assert.match(markdown(report), /pull_request: N\/A/);
+    assert.equal(report.observedRunnerMinutes, null);
+    assert.equal(report.roundedRunnerMinutes, null);
+    assert.equal(report.measuredComputeJobs, 0);
+    assert.equal(report.unmeasuredComputeJobs, 0);
+    assert.match(
+      markdown(report),
+      /Observed active runner minutes: N\/A; sum of per-job rounded minutes: N\/A/,
+    );
   }
+});
+
+test("compute totals disclose missing timestamps instead of counting them as zero", () => {
+  const incomplete = job({ completed_at: null });
+  const missing = summarize(capture([run({ jobs: [incomplete] })]));
+  assert.equal(missing.observedRunnerMinutes, null);
+  assert.equal(missing.roundedRunnerMinutes, null);
+  assert.equal(missing.measuredComputeJobs, 0);
+  assert.equal(missing.unmeasuredComputeJobs, 1);
+
+  const partial = summarize(capture([run({ jobs: [job(), incomplete] })]));
+  assert.equal(partial.observedRunnerMinutes, 40 / 60);
+  assert.equal(partial.roundedRunnerMinutes, 1);
+  assert.equal(partial.measuredComputeJobs, 1);
+  assert.equal(partial.unmeasuredComputeJobs, 1);
+  assert.match(markdown(partial), /\(partial; 1 measured jobs, 1 unmeasured non-skipped jobs\)/);
+});
+
+test("measured zero-duration compute is distinct from jobs with no runner evidence", () => {
+  const instant = job({ completed_at: time(8), runner_id: 123, steps: [] });
+  const noRunner = job({ conclusion: "cancelled", runner_id: 0, steps: [] });
+  const skipped = job({ conclusion: "skipped", runner_id: null, steps: [] });
+  const report = summarize(capture([run({ jobs: [instant, noRunner, skipped] })]));
+  assert.equal(report.observedRunnerMinutes, 0);
+  assert.equal(report.roundedRunnerMinutes, 0);
+  assert.equal(report.measuredComputeJobs, 1);
+  assert.equal(report.unmeasuredComputeJobs, 1);
+  assert.match(markdown(report), /Observed active runner minutes: 0\.00/);
 });
 
 test("different workflows stay separate and per-run revisions and attempts survive", () => {
